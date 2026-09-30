@@ -1,5 +1,6 @@
 -- @description Gain Stage EQ: set the level of a track (average / peak) and level its 4-band spectrum tilt with ReaEQ
 -- @version 0.1.1
+-- @author _n_plugins
 -- @about
 --   Scans ALL items on ONE selected track (take audio, time selection respected), measures the average (RMS of
 --   the active audio) and peak level, applies a gain to reach your target, then measures the energy in four

@@ -17,7 +17,7 @@ SRC=""
 DO_REGISTER=1
 DO_UNINSTALL=0
 
-FILE='GainStageEQ.lua'
+FILE='dist/GainStageEQ.lua'
 DIRNAME='GainStageEQ'
 EFFECT_SUB='GainStageEQ'
 JSFX_FILES='GainStageEQTrim.jsfx'          # space separated; empty = this project has no JSFX
