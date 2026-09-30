@@ -4,7 +4,9 @@
 #   ./install_mac.sh                      install into ~/Library/Application Support/REAPER
 #   ./install_mac.sh --portable DIR       install into a portable REAPER folder
 #   ./install_mac.sh --no-register        do not touch reaper-kb.ini (add the action by hand)
-#   ./install_mac.sh --src DIR            folder containing GainStageEQ.lua (default: next to this script, or ./dev/dist)
+#   ./install_mac.sh --src DIR            folder containing GainStageEQ.lua (default: ./Scripts/GainStageEQ, next to this script, or ./dist)
+#   ./install_mac.sh --package            build dist/GainStageEQ-<version>.zip (Scripts/ + Effects/ folders + this installer)
+#   ./install_mac.sh --out DIR            with --package: write the zip into DIR instead of ./dist
 #   ./install_mac.sh --uninstall          remove exactly what this script added
 #
 # Nothing here modifies your projects. reaper-kb.ini is only edited while REAPER is closed,
@@ -16,8 +18,10 @@ RES=""
 SRC=""
 DO_REGISTER=1
 DO_UNINSTALL=0
+DO_PACKAGE=0
+OUT=""
 
-FILE='dist/GainStageEQ.lua'
+FILE='GainStageEQ.lua'
 DIRNAME='GainStageEQ'
 EFFECT_SUB='GainStageEQ'
 JSFX_FILES='GainStageEQTrim.jsfx'          # space separated; empty = this project has no JSFX
@@ -32,10 +36,78 @@ while [ $# -gt 0 ]; do
     --src)         [ $# -ge 2 ] || die "--src needs a folder"; SRC="$2"; shift 2 ;;
     --no-register) DO_REGISTER=0; shift ;;
     --uninstall)   DO_UNINSTALL=1; shift ;;
-    -h|--help)     sed -n '2,12p' "$0"; exit 0 ;;
+    --package)     DO_PACKAGE=1; shift ;;
+    --out)         [ $# -ge 2 ] || die "--out needs a folder"; OUT="$2"; shift 2 ;;
+    -h|--help)     sed -n '2,13p' "$0"; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
 done
+
+# ---- locate the files to install / package ----------------------------------------------------
+# Layouts accepted (first match wins):
+#   release zip   ./Scripts/GainStageEQ/GainStageEQ.lua   (+ ./Effects/GainStageEQ/*.jsfx next to Scripts/)
+#   flat folder   ./GainStageEQ.lua
+#   repository    ./dist/GainStageEQ.lua                  (+ ./dist/Effects/... from the build, or ./Effects/...)
+locate_src() {
+  if [ -n "$SRC" ]; then
+    :
+  elif [ -f "$HERE/Scripts/$DIRNAME/$FILE" ]; then SRC="$HERE/Scripts/$DIRNAME"
+  elif [ -f "$HERE/$FILE" ];                  then SRC="$HERE"
+  elif [ -f "$HERE/dist/$FILE" ];             then SRC="$HERE/dist"
+  else die "$FILE not found (looked in ./Scripts/$DIRNAME, . and ./dist). Use --src <folder>."; fi
+  [ -f "$SRC/$FILE" ] || die "$SRC/$FILE not found"
+}
+
+# print the folder that contains Effects/$EFFECT_SUB/<file>; fail if it is nowhere
+jsfx_root() {
+  for d in "$SRC" "$HERE/dist" "$HERE"; do
+    if [ -f "$d/Effects/$EFFECT_SUB/$1" ]; then printf '%s' "$d"; return 0; fi
+  done
+  return 1
+}
+
+# ---- --package: build dist/<name>-<version>.zip -------------------------------------------------
+# The zip mirrors REAPER's resource folder (Scripts/..., Effects/...) and carries this installer,
+# so it can be unpacked anywhere and installed with ./install_mac.sh.
+if [ "$DO_PACKAGE" = 1 ]; then
+  command -v zip >/dev/null 2>&1 || die "--package needs the 'zip' command"
+  locate_src
+  VERSION="$(sed -n 's/^-- @version[[:space:]]*//p' "$SRC/$FILE" | head -n 1)"
+  PKG="$DIRNAME-${VERSION:-dev}"
+  OUTDIR="${OUT:-$HERE/dist}"
+  mkdir -p "$OUTDIR"
+  OUTDIR="$(cd "$OUTDIR" && pwd)"
+  ZIP="$OUTDIR/$PKG.zip"
+
+  STAGE="$(mktemp -d "${TMPDIR:-/tmp}/pkg.XXXXXX")"
+  trap 'rm -rf "$STAGE"' EXIT
+  mkdir -p "$STAGE/$PKG/Scripts/$DIRNAME"
+  cp "$SRC/$FILE" "$STAGE/$PKG/Scripts/$DIRNAME/$FILE"
+
+  for j in $JSFX_FILES; do
+    if R="$(jsfx_root "$j")"; then
+      mkdir -p "$STAGE/$PKG/Effects/$EFFECT_SUB"
+      cp "$R/Effects/$EFFECT_SUB/$j" "$STAGE/$PKG/Effects/$EFFECT_SUB/$j"
+    else
+      warn "$j not found - not included (the script writes it itself when needed)"
+    fi
+  done
+
+  cp "$HERE/$(basename "$0")" "$STAGE/$PKG/install_mac.sh"
+  chmod 755 "$STAGE/$PKG/install_mac.sh"
+  for f in README.md CHANGELOG.md LICENSE; do
+    if [ -f "$HERE/$f" ]; then cp "$HERE/$f" "$STAGE/$PKG/$f"; fi
+  done
+
+  # same input -> same zip: fixed timestamps, sorted entries, no extra attributes
+  find "$STAGE" -exec touch -t 202001010000 {} +
+  rm -f "$ZIP"
+  ( cd "$STAGE" && find "$PKG" | LC_ALL=C sort | zip -X -q "$ZIP" -@ )
+
+  say "Built $ZIP"
+  ( cd "$STAGE" && find "$PKG" -type f | LC_ALL=C sort | sed 's/^/  /' )
+  exit 0
+fi
 
 # ---- locate REAPER's resource folder -------------------------------------------------------
 if [ -z "$RES" ]; then
@@ -97,12 +169,7 @@ if [ "$DO_UNINSTALL" = 1 ]; then
 fi
 
 # ---- install ------------------------------------------------------------------------------
-if [ -z "$SRC" ]; then
-  if   [ -f "$HERE/$FILE" ];          then SRC="$HERE"
-  elif [ -f "$HERE/dev/dist/$FILE" ]; then SRC="$HERE/dev/dist"
-  else die "$FILE not found next to this script. Use --src <folder>."; fi
-fi
-[ -f "$SRC/$FILE" ] || die "$SRC/$FILE not found"
+locate_src
 
 VERSION="$(sed -n 's/^-- @version[[:space:]]*//p' "$SRC/$FILE" | head -n 1)"
 say "Installing Gain Stage EQ ${VERSION:-?} into: $RES"
@@ -112,9 +179,9 @@ cp "$SRC/$FILE" "$SCRIPT_PATH"
 say "  script  -> $SCRIPT_PATH"
 
 for j in $JSFX_FILES; do
-  if [ -f "$SRC/Effects/$EFFECT_SUB/$j" ]; then
+  if JSFX_ROOT="$(jsfx_root "$j")"; then
     mkdir -p "$EFFECT_DIR"
-    cp "$SRC/Effects/$EFFECT_SUB/$j" "$EFFECT_DIR/$j"
+    cp "$JSFX_ROOT/Effects/$EFFECT_SUB/$j" "$EFFECT_DIR/$j"
     say "  jsfx    -> $EFFECT_DIR/$j (optional; the script also installs it itself when needed)"
   fi
 done
